@@ -529,7 +529,7 @@
     const bothLocked = players.length === 2 && players.every(player => player.secretLocked);
 
     if (bothLocked && roomData.status !== 'playing' && !roomData.current_turn) {
-      const firstPlayerId = players[0].id;
+      const firstPlayerId = roomData.created_by;
 
       const { error } = await supabase
         .from('cowsbulls_rooms')
