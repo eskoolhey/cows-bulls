@@ -354,8 +354,8 @@
         </div>
 
         <div class="section">
-          <h3>Firebase setup</h3>
-          <p class="tiny">Before this works online, paste your Firebase config into the script near the top where it says <strong>firebaseConfig</strong>. Then enable Firestore in your Firebase project.</p>
+          <h3>Supabase setup</h3>
+          <p class="tiny">Before this works online, paste your Supabase URL and anon public key into the script, then make sure the cowsbulls_rooms table and realtime are enabled in Supabase.</p>
         </div>
       </aside>
 
@@ -399,237 +399,272 @@
   </div>
 
   <script type="module">
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js';
-    import {
-      getFirestore,
-      doc,
-      getDoc,
-      setDoc,
-      updateDoc,
-      onSnapshot,
-      serverTimestamp,
-      arrayUnion,
-      deleteDoc
-    } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js';
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 
-    const firebaseConfig = {
-      apiKey: 'PASTE_YOUR_API_KEY',
-      authDomain: 'PASTE_YOUR_AUTH_DOMAIN',
-      projectId: 'PASTE_YOUR_PROJECT_ID',
-      storageBucket: 'PASTE_YOUR_STORAGE_BUCKET',
-      messagingSenderId: 'PASTE_YOUR_MESSAGING_SENDER_ID',
-      appId: 'PASTE_YOUR_APP_ID'
-    };
+  const supabaseUrl = 'https://jgnykqdkuknvardllbic.supabase.co';
+  const supabaseKey = 'sb_publishable_AB3-Mp1-g3aOL65RHrm6ow_p5ZY7RcV';
+  const supabase = createClient(supabaseUrl, supabaseKey);
 
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
+  const state = {
+    playerId: crypto.randomUUID(),
+    roomCode: '',
+    roomChannel: null,
+    roomData: null
+  };
 
-    const state = {
-      playerId: crypto.randomUUID(),
-      roomCode: '',
-      roomUnsubscribe: null,
-      roomData: null
-    };
+  const els = {
+    playerName: document.getElementById('playerName'),
+    digitLength: document.getElementById('digitLength'),
+    roomCodeInput: document.getElementById('roomCodeInput'),
+    createRoomBtn: document.getElementById('createRoomBtn'),
+    joinRoomBtn: document.getElementById('joinRoomBtn'),
+    leaveRoomBtn: document.getElementById('leaveRoomBtn'),
+    secretInput: document.getElementById('secretInput'),
+    submitSecretBtn: document.getElementById('submitSecretBtn'),
+    guessInput: document.getElementById('guessInput'),
+    submitGuessBtn: document.getElementById('submitGuessBtn'),
+    refreshBtn: document.getElementById('refreshBtn'),
+    roomStatus: document.getElementById('roomStatus'),
+    playerStatus: document.getElementById('playerStatus'),
+    turnStatus: document.getElementById('turnStatus'),
+    liveSummary: document.getElementById('liveSummary'),
+    turnBox: document.getElementById('turnBox'),
+    message: document.getElementById('message'),
+    myHistoryTitle: document.getElementById('myHistoryTitle'),
+    oppHistoryTitle: document.getElementById('oppHistoryTitle'),
+    myHistory: document.getElementById('myHistory'),
+    oppHistory: document.getElementById('oppHistory')
+  };
 
-    const els = {
-      playerName: document.getElementById('playerName'),
-      digitLength: document.getElementById('digitLength'),
-      roomCodeInput: document.getElementById('roomCodeInput'),
-      createRoomBtn: document.getElementById('createRoomBtn'),
-      joinRoomBtn: document.getElementById('joinRoomBtn'),
-      leaveRoomBtn: document.getElementById('leaveRoomBtn'),
-      secretInput: document.getElementById('secretInput'),
-      submitSecretBtn: document.getElementById('submitSecretBtn'),
-      guessInput: document.getElementById('guessInput'),
-      submitGuessBtn: document.getElementById('submitGuessBtn'),
-      refreshBtn: document.getElementById('refreshBtn'),
-      roomStatus: document.getElementById('roomStatus'),
-      playerStatus: document.getElementById('playerStatus'),
-      turnStatus: document.getElementById('turnStatus'),
-      liveSummary: document.getElementById('liveSummary'),
-      turnBox: document.getElementById('turnBox'),
-      message: document.getElementById('message'),
-      myHistoryTitle: document.getElementById('myHistoryTitle'),
-      oppHistoryTitle: document.getElementById('oppHistoryTitle'),
-      myHistory: document.getElementById('myHistory'),
-      oppHistory: document.getElementById('oppHistory')
-    };
+  function setMessage(text, type = '') {
+    els.message.textContent = text;
+    els.message.className = 'message';
+    if (type) els.message.classList.add(type);
+  }
 
-    function setMessage(text, type = '') {
-      els.message.textContent = text;
-      els.message.className = 'message';
-      if (type) els.message.classList.add(type);
+  function onlyDigits(value, maxLen = 6) {
+    return value.replace(/\D/g, '').slice(0, maxLen);
+  }
+
+  function normalizeRoomCode(value) {
+    return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  }
+
+  function hasUniqueDigits(str) {
+    return new Set(str).size === str.length;
+  }
+
+  function validSecret(str, digits) {
+    if (!/^\d+$/.test(str)) return false;
+    if (str.length !== Number(digits)) return false;
+    if (str.startsWith('0')) return false;
+    if (!hasUniqueDigits(str)) return false;
+    return true;
+  }
+
+  function score(secret, guess) {
+    let cows = 0;
+    let bulls = 0;
+    for (let i = 0; i < guess.length; i++) {
+      if (secret.includes(guess[i])) cows++;
+      if (secret[i] === guess[i]) bulls++;
     }
+    return { cows, bulls };
+  }
 
-    function onlyDigits(value, maxLen = 6) {
-      return value.replace(/\D/g, '').slice(0, maxLen);
-    }
+  function makeRoomCode() {
+    return Math.random().toString(36).slice(2, 8).toUpperCase();
+  }
 
-    function normalizeRoomCode(value) {
-      return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
-    }
+  function getPlayerName() {
+    return (els.playerName.value || 'Player').trim() || 'Player';
+  }
 
-    function hasUniqueDigits(str) {
-      return new Set(str).size === str.length;
-    }
+  function getPlayers(roomData) {
+    return Object.values(roomData?.players || {});
+  }
 
-    function validSecret(str, digits) {
-      if (!/^\d+$/.test(str)) return false;
-      if (str.length !== Number(digits)) return false;
-      if (str.startsWith('0')) return false;
-      if (!hasUniqueDigits(str)) return false;
-      return true;
-    }
+  function getMe(roomData) {
+    return roomData?.players?.[state.playerId] || null;
+  }
 
-    function score(secret, guess) {
-      let cows = 0;
-      let bulls = 0;
-      for (let i = 0; i < guess.length; i++) {
-        if (secret.includes(guess[i])) cows++;
-        if (secret[i] === guess[i]) bulls++;
+  function getOpponent(roomData) {
+    const players = getPlayers(roomData);
+    return players.find(player => player.id !== state.playerId) || null;
+  }
+
+  function historyMarkup(list) {
+    if (!list?.length) return '<div class="empty">No guesses yet.</div>';
+    const rows = list.map((item, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td><strong>${item.guess}</strong></td>
+        <td>${item.cows}</td>
+        <td>${item.bulls}</td>
+      </tr>
+    `).join('');
+    return `
+      <table>
+        <thead>
+          <tr><th>#</th><th>Guess</th><th>Cows</th><th>Bulls</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  async function fetchRoom(roomCode) {
+    const { data, error } = await supabase
+      .from('cowsbulls_rooms')
+      .select('*')
+      .eq('room_code', roomCode)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  }
+
+  async function maybeStartGame(roomData) {
+    const players = getPlayers(roomData);
+    const bothLocked = players.length === 2 && players.every(player => player.secretLocked);
+
+    if (bothLocked && roomData.status !== 'playing' && !roomData.current_turn) {
+      const firstPlayerId = players[0].id;
+
+      const { error } = await supabase
+        .from('cowsbulls_rooms')
+        .update({
+          status: 'playing',
+          current_turn: firstPlayerId
+        })
+        .eq('room_code', roomData.room_code);
+
+      if (error) {
+        console.error(error);
       }
-      return { cows, bulls };
     }
+  }
 
-    function makeRoomCode() {
-      return Math.random().toString(36).slice(2, 8).toUpperCase();
-    }
-
-    function getPlayerName() {
-      return (els.playerName.value || 'Player').trim() || 'Player';
-    }
-
-    function getPlayers(roomData) {
-      return Object.values(roomData.players || {});
-    }
-
-    function getMe(roomData) {
-      return roomData?.players?.[state.playerId] || null;
-    }
-
-    function getOpponent(roomData) {
-      const players = getPlayers(roomData);
-      return players.find(player => player.id !== state.playerId) || null;
-    }
-
-    function historyMarkup(list) {
-      if (!list?.length) return '<div class="empty">No guesses yet.</div>';
-      const rows = [...list].reverse().map((item, index) => `
-        <tr>
-          <td>${index + 1}</td>
-          <td><strong>${item.guess}</strong></td>
-          <td>${item.cows}</td>
-          <td>${item.bulls}</td>
-        </tr>
-      `).join('');
-      return `
-        <table>
-          <thead>
-            <tr><th>#</th><th>Guess</th><th>Cows</th><th>Bulls</th></tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
-    }
-
-    async function createRoom() {
+  async function createRoom() {
+    try {
       const roomCode = makeRoomCode();
-      const roomRef = doc(db, 'cowsbulls_rooms', roomCode);
       const playerName = getPlayerName();
       const digits = Number(els.digitLength.value);
 
-      await setDoc(roomRef, {
-        roomCode,
-        digits,
-        createdAt: serverTimestamp(),
-        createdBy: state.playerId,
-        status: 'waiting',
-        currentTurn: null,
-        winnerId: null,
-        players: {
-          [state.playerId]: {
-            id: state.playerId,
-            name: playerName,
-            secret: '',
-            secretLocked: false,
-            guesses: []
-          }
+      const players = {
+        [state.playerId]: {
+          id: state.playerId,
+          name: playerName,
+          secret: '',
+          secretLocked: false,
+          guesses: []
         }
-      });
+      };
+
+      const { error } = await supabase
+        .from('cowsbulls_rooms')
+        .insert({
+          room_code: roomCode,
+          digits,
+          created_by: state.playerId,
+          status: 'waiting',
+          current_turn: null,
+          winner_id: null,
+          players
+        });
+
+      if (error) throw error;
 
       state.roomCode = roomCode;
       els.roomCodeInput.value = roomCode;
       subscribeToRoom(roomCode);
+      await refreshState();
       setMessage(`Room ${roomCode} created. Send the code to your friend.`, 'success');
+    } catch (error) {
+      console.error(error);
+      setMessage('Could not create room.', 'error');
     }
+  }
 
-    async function joinRoom() {
+  async function joinRoom() {
+    try {
       const roomCode = normalizeRoomCode(els.roomCodeInput.value);
       if (!roomCode) {
         setMessage('Enter a valid room code.', 'error');
         return;
       }
 
-      const roomRef = doc(db, 'cowsbulls_rooms', roomCode);
-      const snap = await getDoc(roomRef);
+      const roomData = await fetchRoom(roomCode);
 
-      if (!snap.exists()) {
+      if (!roomData) {
         setMessage('Room not found.', 'error');
         return;
       }
 
-      const data = snap.data();
-      const players = getPlayers(data);
-      if (players.length >= 2 && !data.players[state.playerId]) {
+      const players = roomData.players || {};
+      const playerList = Object.values(players);
+
+      if (playerList.length >= 2 && !players[state.playerId]) {
         setMessage('This room already has 2 players.', 'error');
         return;
       }
 
-      await updateDoc(roomRef, {
-        [`players.${state.playerId}`]: {
-          id: state.playerId,
-          name: getPlayerName(),
-          secret: '',
-          secretLocked: false,
-          guesses: []
-        },
-        status: 'waiting'
-      });
+      players[state.playerId] = {
+        id: state.playerId,
+        name: getPlayerName(),
+        secret: '',
+        secretLocked: false,
+        guesses: []
+      };
+
+      const { error } = await supabase
+        .from('cowsbulls_rooms')
+        .update({
+          players,
+          status: 'waiting'
+        })
+        .eq('room_code', roomCode);
+
+      if (error) throw error;
 
       state.roomCode = roomCode;
       subscribeToRoom(roomCode);
+      await refreshState();
       setMessage(`Joined room ${roomCode}.`, 'success');
+    } catch (error) {
+      console.error(error);
+      setMessage('Could not join room.', 'error');
+    }
+  }
+
+  function subscribeToRoom(roomCode) {
+    if (state.roomChannel) {
+      supabase.removeChannel(state.roomChannel);
     }
 
-    function subscribeToRoom(roomCode) {
-      if (state.roomUnsubscribe) state.roomUnsubscribe();
-      const roomRef = doc(db, 'cowsbulls_rooms', roomCode);
-      state.roomUnsubscribe = onSnapshot(roomRef, async (snap) => {
-        if (!snap.exists()) {
-          state.roomData = null;
-          render();
-          return;
-        }
-
-        state.roomData = snap.data();
-        const players = getPlayers(state.roomData);
-
-        if (players.length === 2) {
-          const bothLocked = players.every(player => player.secretLocked);
-          if (bothLocked && state.roomData.status !== 'playing') {
-            await updateDoc(roomRef, {
-              status: 'playing',
-              currentTurn: players[0].id
-            });
-            return;
+    state.roomChannel = supabase
+      .channel(`room-${roomCode}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'cowsbulls_rooms',
+          filter: `room_code=eq.${roomCode}`
+        },
+        async (payload) => {
+          state.roomData = payload.new || null;
+          if (state.roomData) {
+            await maybeStartGame(state.roomData);
           }
+          render();
         }
+      )
+      .subscribe();
+  }
 
-        render();
-      });
-    }
-
-    async function lockSecret() {
+  async function lockSecret() {
+    try {
       if (!state.roomCode || !state.roomData) {
         setMessage('Join a room first.', 'error');
         return;
@@ -637,35 +672,47 @@
 
       const secret = onlyDigits(els.secretInput.value, 6);
       const digits = Number(state.roomData.digits || els.digitLength.value);
+
       if (!validSecret(secret, digits)) {
         setMessage(`Enter a valid ${digits}-digit secret with no repeated digits and no leading 0.`, 'error');
         return;
       }
 
-      const roomRef = doc(db, 'cowsbulls_rooms', state.roomCode);
-      await updateDoc(roomRef, {
-        [`players.${state.playerId}.secret`]: secret,
-        [`players.${state.playerId}.secretLocked`]: true,
-        [`players.${state.playerId}.name`]: getPlayerName()
-      });
+      const players = structuredClone(state.roomData.players || {});
+      players[state.playerId].secret = secret;
+      players[state.playerId].secretLocked = true;
+      players[state.playerId].name = getPlayerName();
+
+      const { error } = await supabase
+        .from('cowsbulls_rooms')
+        .update({ players })
+        .eq('room_code', state.roomCode);
+
+      if (error) throw error;
 
       els.secretInput.value = '';
       setMessage('Your secret is locked in.', 'success');
+    } catch (error) {
+      console.error(error);
+      setMessage('Could not lock secret.', 'error');
     }
+  }
 
-    async function submitGuess() {
+  async function submitGuess() {
+    try {
       if (!state.roomData || state.roomData.status !== 'playing') {
         setMessage('Game is not ready yet.', 'error');
         return;
       }
 
-      if (state.roomData.currentTurn !== state.playerId) {
+      if (state.roomData.current_turn !== state.playerId) {
         setMessage('It is not your turn.', 'error');
         return;
       }
 
       const myPlayer = getMe(state.roomData);
       const opponent = getOpponent(state.roomData);
+
       if (!myPlayer || !opponent || !opponent.secretLocked) {
         setMessage('Waiting for both players to lock secrets.', 'error');
         return;
@@ -673,6 +720,7 @@
 
       const guess = onlyDigits(els.guessInput.value, 6);
       const digits = Number(state.roomData.digits);
+
       if (!validSecret(guess, digits)) {
         setMessage(`Enter a valid ${digits}-digit guess.`, 'error');
         return;
@@ -684,150 +732,169 @@
       }
 
       const result = score(opponent.secret, guess);
-      const guessEntry = {
+      const players = structuredClone(state.roomData.players || {});
+
+      players[state.playerId].guesses.unshift({
         guess,
         cows: result.cows,
         bulls: result.bulls,
         createdAt: Date.now()
-      };
+      });
 
-      const roomRef = doc(db, 'cowsbulls_rooms', state.roomCode);
-      const nextTurn = opponent.id;
       const updatePayload = {
-        [`players.${state.playerId}.guesses`]: arrayUnion(guessEntry),
-        currentTurn: nextTurn
+        players,
+        current_turn: opponent.id
       };
 
       if (result.bulls === digits) {
         updatePayload.status = 'finished';
-        updatePayload.winnerId = state.playerId;
+        updatePayload.winner_id = state.playerId;
       }
 
-      await updateDoc(roomRef, updatePayload);
+      const { error } = await supabase
+        .from('cowsbulls_rooms')
+        .update(updatePayload)
+        .eq('room_code', state.roomCode);
+
+      if (error) throw error;
+
       els.guessInput.value = '';
       setMessage(`${guess} → ${result.cows} cows, ${result.bulls} bulls.`, 'success');
+    } catch (error) {
+      console.error(error);
+      setMessage('Could not submit guess.', 'error');
+    }
+  }
+
+  async function leaveRoom() {
+    if (state.roomChannel) {
+      supabase.removeChannel(state.roomChannel);
+      state.roomChannel = null;
     }
 
-    async function leaveRoom() {
-      if (state.roomUnsubscribe) state.roomUnsubscribe();
-      state.roomUnsubscribe = null;
-      state.roomCode = '';
-      state.roomData = null;
-      els.roomCodeInput.value = '';
-      els.secretInput.value = '';
-      els.guessInput.value = '';
-      render();
-      setMessage('Left room.', 'success');
-    }
-
-    async function refreshState() {
-      if (!state.roomCode) return;
-      const roomRef = doc(db, 'cowsbulls_rooms', state.roomCode);
-      const snap = await getDoc(roomRef);
-      state.roomData = snap.exists() ? snap.data() : null;
-      render();
-    }
-
-    function render() {
-      const roomData = state.roomData;
-      const me = roomData ? getMe(roomData) : null;
-      const opponent = roomData ? getOpponent(roomData) : null;
-
-      els.playerStatus.textContent = getPlayerName();
-      els.roomStatus.textContent = state.roomCode || 'Not connected';
-
-      const joined = !!roomData;
-      els.leaveRoomBtn.disabled = !joined;
-      els.submitSecretBtn.disabled = !joined;
-
-      if (!roomData) {
-        els.turnStatus.textContent = 'Waiting';
-        els.liveSummary.textContent = 'Create or join a room';
-        els.turnBox.textContent = 'Create or join a room first.';
-        els.guessInput.disabled = true;
-        els.submitGuessBtn.disabled = true;
-        els.myHistory.innerHTML = '<div class="empty">No guesses yet.</div>';
-        els.oppHistory.innerHTML = '<div class="empty">No guesses yet.</div>';
-        els.myHistoryTitle.textContent = 'Your guesses';
-        els.oppHistoryTitle.textContent = 'Opponent guesses';
-        return;
-      }
-
-      const players = getPlayers(roomData);
-      const waitingForSecond = players.length < 2;
-      const bothLocked = players.length === 2 && players.every(player => player.secretLocked);
-      const isMyTurn = roomData.currentTurn === state.playerId;
-
-      els.myHistoryTitle.textContent = `${me?.name || 'Your'} guesses`;
-      els.oppHistoryTitle.textContent = `${opponent?.name || 'Opponent'} guesses`;
-      els.myHistory.innerHTML = historyMarkup(me?.guesses || []);
-      els.oppHistory.innerHTML = historyMarkup(opponent?.guesses || []);
-
-      if (waitingForSecond) {
-        els.turnStatus.textContent = 'Waiting';
-        els.liveSummary.textContent = 'Waiting for opponent';
-        els.turnBox.textContent = `Room ${state.roomCode} created. Waiting for someone to join.`;
-        els.guessInput.disabled = true;
-        els.submitGuessBtn.disabled = true;
-        return;
-      }
-
-      if (!bothLocked) {
-        els.turnStatus.textContent = 'Setup';
-        els.liveSummary.textContent = `${players.filter(player => player.secretLocked).length}/2 secrets locked`;
-        els.turnBox.textContent = 'Both players need to lock their secret numbers.';
-        els.guessInput.disabled = true;
-        els.submitGuessBtn.disabled = true;
-        return;
-      }
-
-      if (roomData.status === 'finished') {
-        const winnerName = roomData.players?.[roomData.winnerId]?.name || 'Someone';
-        els.turnStatus.textContent = 'Finished';
-        els.liveSummary.textContent = `${winnerName} won`;
-        els.turnBox.textContent = roomData.winnerId === state.playerId
-          ? `You won. You cracked ${opponent?.name || 'your opponent'}'s number.`
-          : `${winnerName} won the game.`;
-        els.guessInput.disabled = true;
-        els.submitGuessBtn.disabled = true;
-        return;
-      }
-
-      els.turnStatus.textContent = isMyTurn ? 'Your turn' : `${opponent?.name || 'Opponent'}'s turn`;
-      els.liveSummary.textContent = `${me?.name || 'You'}: ${(me?.guesses || []).length} • ${opponent?.name || 'Opponent'}: ${(opponent?.guesses || []).length}`;
-      els.turnBox.textContent = isMyTurn
-        ? `It's your turn. Guess ${opponent?.name || 'your opponent'}'s ${roomData.digits}-digit number.`
-        : `Waiting for ${opponent?.name || 'your opponent'} to guess.`;
-      els.guessInput.disabled = !isMyTurn;
-      els.submitGuessBtn.disabled = !isMyTurn;
-    }
-
-    els.roomCodeInput.addEventListener('input', (e) => {
-      e.target.value = normalizeRoomCode(e.target.value);
-    });
-
-    [els.secretInput, els.guessInput].forEach((input) => {
-      input.addEventListener('input', (e) => {
-        e.target.value = onlyDigits(e.target.value, 6);
-      });
-    });
-
-    els.createRoomBtn.addEventListener('click', createRoom);
-    els.joinRoomBtn.addEventListener('click', joinRoom);
-    els.leaveRoomBtn.addEventListener('click', leaveRoom);
-    els.submitSecretBtn.addEventListener('click', lockSecret);
-    els.submitGuessBtn.addEventListener('click', submitGuess);
-    els.refreshBtn.addEventListener('click', refreshState);
-
-    els.guessInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') submitGuess();
-    });
-
-    els.secretInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') lockSecret();
-    });
-
+    state.roomCode = '';
+    state.roomData = null;
+    els.roomCodeInput.value = '';
+    els.secretInput.value = '';
+    els.guessInput.value = '';
     render();
-  </script>
+    setMessage('Left room.', 'success');
+  }
+
+  async function refreshState() {
+    try {
+      if (!state.roomCode) return;
+      state.roomData = await fetchRoom(state.roomCode);
+      if (state.roomData) {
+        await maybeStartGame(state.roomData);
+      }
+      render();
+    } catch (error) {
+      console.error(error);
+      setMessage('Could not refresh room.', 'error');
+    }
+  }
+
+  function render() {
+    const roomData = state.roomData;
+    const me = roomData ? getMe(roomData) : null;
+    const opponent = roomData ? getOpponent(roomData) : null;
+
+    els.playerStatus.textContent = getPlayerName();
+    els.roomStatus.textContent = state.roomCode || 'Not connected';
+
+    const joined = !!roomData;
+    els.leaveRoomBtn.disabled = !joined;
+    els.submitSecretBtn.disabled = !joined;
+
+    if (!roomData) {
+      els.turnStatus.textContent = 'Waiting';
+      els.liveSummary.textContent = 'Create or join a room';
+      els.turnBox.textContent = 'Create or join a room first.';
+      els.guessInput.disabled = true;
+      els.submitGuessBtn.disabled = true;
+      els.myHistory.innerHTML = '<div class="empty">No guesses yet.</div>';
+      els.oppHistory.innerHTML = '<div class="empty">No guesses yet.</div>';
+      els.myHistoryTitle.textContent = 'Your guesses';
+      els.oppHistoryTitle.textContent = 'Opponent guesses';
+      return;
+    }
+
+    const players = getPlayers(roomData);
+    const waitingForSecond = players.length < 2;
+    const bothLocked = players.length === 2 && players.every(player => player.secretLocked);
+    const isMyTurn = roomData.current_turn === state.playerId;
+
+    els.myHistoryTitle.textContent = `${me?.name || 'Your'} guesses`;
+    els.oppHistoryTitle.textContent = `${opponent?.name || 'Opponent'} guesses`;
+    els.myHistory.innerHTML = historyMarkup(me?.guesses || []);
+    els.oppHistory.innerHTML = historyMarkup(opponent?.guesses || []);
+
+    if (waitingForSecond) {
+      els.turnStatus.textContent = 'Waiting';
+      els.liveSummary.textContent = 'Waiting for opponent';
+      els.turnBox.textContent = `Room ${state.roomCode} created. Waiting for someone to join.`;
+      els.guessInput.disabled = true;
+      els.submitGuessBtn.disabled = true;
+      return;
+    }
+
+    if (!bothLocked) {
+      els.turnStatus.textContent = 'Setup';
+      els.liveSummary.textContent = `${players.filter(player => player.secretLocked).length}/2 secrets locked`;
+      els.turnBox.textContent = 'Both players need to lock their secret numbers.';
+      els.guessInput.disabled = true;
+      els.submitGuessBtn.disabled = true;
+      return;
+    }
+
+    if (roomData.status === 'finished') {
+      const winnerName = roomData.players?.[roomData.winner_id]?.name || 'Someone';
+      els.turnStatus.textContent = 'Finished';
+      els.liveSummary.textContent = `${winnerName} won`;
+      els.turnBox.textContent = roomData.winner_id === state.playerId
+        ? `You won. You cracked ${opponent?.name || 'your opponent'}'s number.`
+        : `${winnerName} won the game.`;
+      els.guessInput.disabled = true;
+      els.submitGuessBtn.disabled = true;
+      return;
+    }
+
+    els.turnStatus.textContent = isMyTurn ? 'Your turn' : `${opponent?.name || 'Opponent'}'s turn`;
+    els.liveSummary.textContent = `${me?.name || 'You'}: ${(me?.guesses || []).length} • ${opponent?.name || 'Opponent'}: ${(opponent?.guesses || []).length}`;
+    els.turnBox.textContent = isMyTurn
+      ? `It's your turn. Guess ${opponent?.name || 'your opponent'}'s ${roomData.digits}-digit number.`
+      : `Waiting for ${opponent?.name || 'your opponent'} to guess.`;
+    els.guessInput.disabled = !isMyTurn;
+    els.submitGuessBtn.disabled = !isMyTurn;
+  }
+
+  els.roomCodeInput.addEventListener('input', (e) => {
+    e.target.value = normalizeRoomCode(e.target.value);
+  });
+
+  [els.secretInput, els.guessInput].forEach((input) => {
+    input.addEventListener('input', (e) => {
+      e.target.value = onlyDigits(e.target.value, 6);
+    });
+  });
+
+  els.createRoomBtn.addEventListener('click', createRoom);
+  els.joinRoomBtn.addEventListener('click', joinRoom);
+  els.leaveRoomBtn.addEventListener('click', leaveRoom);
+  els.submitSecretBtn.addEventListener('click', lockSecret);
+  els.submitGuessBtn.addEventListener('click', submitGuess);
+  els.refreshBtn.addEventListener('click', refreshState);
+
+  els.guessInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitGuess();
+  });
+
+  els.secretInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') lockSecret();
+  });
+
+  render();
+</script>
 </body>
 </html>
